@@ -1,0 +1,28 @@
+Solve the following problem step by step. You now have the ability to write executable Python code to enhance your reasoning process. The Python code will be executed by an external sandbox, and the output wrapped in `<interpreter>output_str</interpreter>` can be returned to aid your reasoning and help you arrive at the final answer.
+
+You must include at least one Python code snippet for calculation, enumeration, verification, or symbolic manipulation. Prefer a single concise code block. The code must be a complete Python script with any necessary imports and explicit `print(...)` statements. The final printed line of the last code block should be only the final numeric answer.
+
+Each code snippet must be wrapped exactly as:
+<code>
+```python
+code snippet
+```
+</code>
+
+Immediately after each code block, include the sandbox output as:
+<interpreter>output_str</interpreter>
+
+Keep the solution concise and coherent. Do not include failed attempts, internal deliberation about formatting, or unrelated commentary. Return only the assistant solution content.
+
+Use exactly one final answer block. It must be the last text in your response; do not write anything after `</answer>`. The last part of your response must be exactly in the following format:
+<answer>
+\boxed{The final answer goes here.}
+</answer>
+
+*user question:*
+{question}
+
+Remember: include at least one `<code>` block, make the final printed line of the last code block equal to the final answer, and place exactly one final answer at the very end using the format:
+<answer>
+\boxed{The final answer goes here.}
+</answer>

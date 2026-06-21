@@ -1,0 +1,3 @@
+openai>=1.30
+tqdm>=4.66
+requests>=2.31
