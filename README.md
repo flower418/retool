@@ -18,6 +18,9 @@ sft_train.jsonl              # two locally generated examples
 retool_sft_merged.jsonl      # 2000 HF rows + the 2 local examples
 requirements.txt             # Python dependencies
 .env.example                 # API configuration template
+scripts/infer_hf.py          # run a merged HF checkpoint for inference
+scripts/run_verl_sft.sh      # train with verl SFT on the prepared dataset
+scripts/prepare_verl_sft_data.py  # convert JSONL data to verl parquet
 ```
 
 Do not commit `.env`; it is ignored by Git.
@@ -102,3 +105,29 @@ Rows that fail validation are not written to the main SFT file.
 
 It currently contains 2002 rows: the original 2000 rows from
 `JoeYing/ReTool-SFT` and 2 generated examples from this repository.
+
+## Run a Fine-Tuned Checkpoint
+
+Use the merged Hugging Face checkpoint, not the raw verl/FSDP shard directory.
+On the training server, the latest merged model is typically under
+`/root/autodl-tmp/retool/runs/merged/...-hf`.
+
+```bash
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate zero
+cd /root/autodl-tmp/retool
+
+python scripts/infer_hf.py \
+  --model /root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf \
+  --question 'Let N be the number of ordered pairs of positive integers (a, b) such that a + b + ab <= 2026 and gcd(a, b) = 1. Find the remainder when N is divided by 1000.' \
+  --max-new-tokens 2048
+```
+
+Run the original base model by changing `--model`:
+
+```bash
+python scripts/infer_hf.py \
+  --model /root/autodl-tmp/models/Qwen2.5-3B \
+  --question 'Your problem here' \
+  --max-new-tokens 2048
+```

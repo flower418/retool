@@ -1,3 +1,6 @@
 openai>=1.30
 tqdm>=4.66
 requests>=2.31
+torch>=2.5
+transformers>=4.45
+accelerate>=1.0
