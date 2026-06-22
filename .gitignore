@@ -8,4 +8,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
-
+bench/
+data/
+logs/
+runs/
+wandb/

@@ -83,6 +83,60 @@ Run:
 python gen_data.py --in questions.jsonl --out sft_train.jsonl --concurrency 4
 ```
 
+## Async Rollout Sandbox
+
+For RL rollouts, use `retool_sandbox` instead of `gen_data.py`. It implements
+the online loop:
+
+```text
+model generates until </code>
+-> sandbox executes the Python block asynchronously
+-> <interpreter>stdout</interpreter> is appended to the transcript
+-> model continues generation
+```
+
+Minimal usage:
+
+```python
+from retool_sandbox import AsyncPythonSandboxPool, SandboxLimits, rollout_with_sandbox
+
+async with AsyncPythonSandboxPool(
+    num_workers=32,
+    limits=SandboxLimits(timeout_s=2.0, max_output_bytes=20000),
+) as sandbox:
+    result = await rollout_with_sandbox(prompt, generate_until, sandbox)
+```
+
+`generate_until(transcript, stop_sequences)` is the adapter you provide for
+vLLM, Transformers, or a remote rollout server. It should generate the next
+assistant chunk with stop strings such as `</code>` and `</answer>`.
+
+Run the local demo:
+
+```bash
+python examples/sandbox_rollout_demo.py
+```
+
+Run HF inference with online sandbox execution:
+
+```bash
+python scripts/infer_hf_with_sandbox.py \
+  --model /path/to/hf-model-or-ckpt \
+  --question "Compute 123456789123456789 * 987654321987654321." \
+  --max-tokens 1024
+```
+
+On the training server, `--model` can be omitted when `MODEL_PATH` is set or
+when the default local SFT checkpoint exists. The script uses an embedded ReTool
+prompt by default; pass `--prompt-template prompts/solve_with_code.txt` only if
+you want to force the dataset-generation prompt.
+
+The sandbox uses persistent worker processes, so hot execution avoids spawning a
+new Python interpreter per code block. Timeouts, output caps, per-run temporary
+directories, and memory/file limits are applied per worker. This is intended for
+model-generated math/code snippets during rollout, not as a hardened security
+boundary for hostile code.
+
 ## Validation
 
 By default, `gen_data.py`:
