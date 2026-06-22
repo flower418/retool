@@ -15,6 +15,10 @@ def parse_args() -> argparse.Namespace:
         description="Generate a ReTool-style response from a merged HF model."
     )
     parser.add_argument("--model", required=True, help="HF model directory or model id.")
+    parser.add_argument(
+        "--tokenizer",
+        help="Optional tokenizer directory. Defaults to --model.",
+    )
     parser.add_argument("--question", required=True, help="Problem text to solve.")
     parser.add_argument(
         "--prompt-template",
@@ -24,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument(
         "--dtype",
         choices=("auto", "bf16", "fp16", "fp32"),
@@ -68,13 +73,14 @@ def main() -> None:
     prompt_template = Path(args.prompt_template).read_text(encoding="utf-8")
     prompt = prompt_template.replace("{question}", args.question)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer_path = args.tokenizer or args.model
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=resolve_dtype(args.dtype),
+        dtype=resolve_dtype(args.dtype),
         device_map=args.device_map,
         trust_remote_code=True,
     )
@@ -95,12 +101,19 @@ def main() -> None:
     encoded = {key: value.to(device) for key, value in encoded.items()}
     input_len = encoded["input_ids"].shape[-1]
 
+    eos_token_ids = [tokenizer.eos_token_id]
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if isinstance(im_end_id, int) and im_end_id >= 0:
+        eos_token_ids.append(im_end_id)
+    eos_token_ids = sorted(set(token_id for token_id in eos_token_ids if token_id is not None))
+
     do_sample = args.temperature > 0
     generation_kwargs = {
         "max_new_tokens": args.max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
+        "eos_token_id": eos_token_ids,
         "do_sample": do_sample,
+        "repetition_penalty": args.repetition_penalty,
     }
     if do_sample:
         generation_kwargs["temperature"] = args.temperature
