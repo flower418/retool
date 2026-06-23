@@ -165,15 +165,15 @@ def load_tokenizer(path: str):
 
 
 def trim_at_rollout_boundary(text: str) -> tuple[str, str | None]:
-    block = find_next_unexecuted_code(text)
-    if block is not None:
-        return text[: block.end], "__code_block__"
-
     match = ANSWER_LINE_RE.search(text)
     if match is not None:
         line_end = text.find("\n", match.end())
         end = len(text) if line_end < 0 else line_end + 1
         return text[:end], "__answer__"
+
+    block = find_next_unexecuted_code(text)
+    if block is not None:
+        return text[: block.end], "__code_block__"
 
     return text, None
 

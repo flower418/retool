@@ -19,7 +19,7 @@ FENCED_CODE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 INTERPRETER_RE = re.compile(r"\s*<interpreter>.*?</interpreter>", re.DOTALL)
-ANSWER_DONE_RE = re.compile(r"(?im)^\s*Answer\s*:\s*\S[^\n]*\s*$")
+ANSWER_DONE_RE = re.compile(r"(?im)^\s*Answer\s*:\s*\S[^\n]*")
 
 
 @dataclass(frozen=True)
@@ -137,6 +137,14 @@ def _append_missing_stop_text(step: ModelStep) -> str:
     return step.text
 
 
+def _find_answer_end(text: str) -> int | None:
+    match = ANSWER_DONE_RE.search(text)
+    if match is None:
+        return None
+    line_end = text.find("\n", match.end())
+    return len(text) if line_end < 0 else line_end + 1
+
+
 async def rollout_with_sandbox(
     prompt: str,
     generate_until: GenerateUntil,
@@ -165,6 +173,18 @@ async def rollout_with_sandbox(
         generated += chunk
         transcript += chunk
 
+        answer_end = _find_answer_end(generated)
+        if answer_end is not None:
+            generated = generated[:answer_end]
+            transcript = prompt + generated
+            return RolloutResult(
+                text=generated,
+                transcript=transcript,
+                tool_results=tool_results,
+                model_calls=model_calls,
+                stop_reason="answer",
+            )
+
         executed_this_call = False
         while len(tool_results) < max_tool_calls:
             generated, result = await execute_next_unexecuted_code(generated, sandbox)
@@ -181,15 +201,6 @@ async def rollout_with_sandbox(
                 tool_results=tool_results,
                 model_calls=model_calls,
                 stop_reason="max_tool_calls",
-            )
-
-        if ANSWER_DONE_RE.search(generated):
-            return RolloutResult(
-                text=generated,
-                transcript=transcript,
-                tool_results=tool_results,
-                model_calls=model_calls,
-                stop_reason="answer",
             )
 
         if step.finished and not executed_this_call:

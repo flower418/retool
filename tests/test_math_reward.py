@@ -102,6 +102,16 @@ class MathRewardTests(unittest.TestCase):
         self.assertFalse(result["answer_extracted"])
         self.assertEqual(result["reason"], "missing_final_answer")
 
+    def test_answer_followed_by_more_output_is_not_format_ok(self):
+        result = compute_score(
+            "math_dapo",
+            "Answer: 23\n\n<code>\n```python\nprint(23)\n```\n</code>",
+            "23",
+        )
+
+        self.assertEqual(result["score"], 1.0)
+        self.assertFalse(result["format_ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

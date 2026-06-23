@@ -225,24 +225,24 @@ def _visible_text(solution_str: str) -> str:
 def extract_final_answer(solution_str: str) -> ExtractedAnswer | None:
     """Extract the final top-level answer declaration from a model response."""
 
-    visible = _visible_text(solution_str)
-    lines = [line.strip() for line in visible.splitlines() if line.strip()]
-    last_line = lines[-1] if lines else ""
+    protected_spans = [match.span() for match in PROTECTED_BLOCK_RE.finditer(solution_str)]
     answer_candidates: list[ExtractedAnswer] = []
-
-    for match in ANSWER_LINE_RE.finditer(visible):
+    for match in ANSWER_LINE_RE.finditer(solution_str):
+        if any(start <= match.start() < end for start, end in protected_spans):
+            continue
         raw = _strip_light_markup(match.group("answer"))
         if raw:
             answer_candidates.append(
                 ExtractedAnswer(
                     raw=raw,
                     kind="answer_line",
-                    format_ok=bool(last_line and ANSWER_LINE_RE.fullmatch(last_line)),
+                    format_ok=not solution_str[match.end() :].strip(),
                 )
             )
     if answer_candidates:
         return answer_candidates[-1]
 
+    visible = _visible_text(solution_str)
     phrase_candidates: list[ExtractedAnswer] = []
     for match in ANSWER_PHRASE_RE.finditer(visible[-1200:]):
         raw_group = match.group("final") or match.group("answer") or ""
