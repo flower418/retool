@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -92,11 +91,16 @@ UNICODE_FRACTIONS = {
 }
 
 
-@dataclass(frozen=True)
 class ExtractedAnswer:
-    raw: str
-    kind: str
-    format_ok: bool
+    __slots__ = ("raw", "kind", "format_ok")
+
+    def __init__(self, raw: str, kind: str, format_ok: bool) -> None:
+        object.__setattr__(self, "raw", raw)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "format_ok", bool(format_ok))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
 
 
 def _stable_result(
