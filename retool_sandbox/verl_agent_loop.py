@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import time
 from typing import Any
 from uuid import uuid4
@@ -15,8 +17,29 @@ from .async_python import AsyncPythonSandboxPool, SandboxLimits
 from .retool import find_next_unexecuted_code, format_interpreter_block
 
 
+ANSWER_RE = re.compile(r"(?i)\*{0,2}\s*Answer\s*:\s*\*{0,2}\s*\S[^\n]*")
+ANSWER_TRAILING_PUNCT_RE = re.compile(r"(?i)((?:\*{0,2}\s*)?Answer\s*:\s*[^\n]*?)[.。．]+(\s*)$")
+ANSWER_WITHOUT_QUOTES_RE = re.compile(
+    r"(?i)((?:\*{0,2}\s*)?Answer\s*:\s*[^\n]*?)(?:[.。．]?\s*)\(\s*without\s+quotes\s*\)(\s*)$"
+)
+PROTECTED_BLOCK_RE = re.compile(
+    r"<(?:code|interpreter)>.*?</(?:code|interpreter)>|```(?:python|py)?\s*\n.*?```",
+    re.DOTALL | re.IGNORECASE,
+)
+
 RETOOL_PROMPT_PREFIX = """You have access to a Python sandbox during generation.
-When calculation or code helps, use exactly this format:
+Follow this protocol strictly:
+1. Before any prose, write one short Python block that computes or verifies the
+   key quantity. The block must print the result you need.
+2. Treat the interpreter output as the source of truth. If the code errors,
+   write a corrected short Python block.
+3. Keep the solution concise after the sandbox result.
+4. If the first code block succeeds, do not write more code; immediately write
+   the final answer line.
+5. End with exactly one final line in this format: Answer: <final answer>
+   Do not use <answer> tags, boxes, or any text after the final answer line.
+
+Use exactly this code format:
 <code>
 ```python
 print(...)
@@ -25,9 +48,7 @@ print(...)
 
 The sandbox will append:
 <interpreter>output</interpreter>
-
-Use the interpreter output as ground truth. Use the sandbox at least once before
-the final answer. Keep the final answer format required by the problem."""
+"""
 
 
 _SANDBOX_POOL: AsyncPythonSandboxPool | None = None
@@ -48,6 +69,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def _get_sandbox_pool() -> AsyncPythonSandboxPool:
     global _SANDBOX_LOCK, _SANDBOX_POOL
     if _SANDBOX_LOCK is None:
@@ -62,6 +90,8 @@ async def _get_sandbox_pool() -> AsyncPythonSandboxPool:
                     memory_mb=_env_int("RETOOL_SANDBOX_MEMORY_MB", 512),
                     file_mb=_env_int("RETOOL_SANDBOX_FILE_MB", 8),
                 ),
+                isolated=_env_bool("RETOOL_SANDBOX_ISOLATED", True),
+                no_site=_env_bool("RETOOL_SANDBOX_NO_SITE", False),
             )
             await _SANDBOX_POOL.start()
         return _SANDBOX_POOL
@@ -80,6 +110,66 @@ def _encode_text(tokenizer, text: str) -> list[int]:
     return tokenizer.encode(text, add_special_tokens=False)
 
 
+def _find_answer_end(text: str) -> int | None:
+    protected_spans = [match.span() for match in PROTECTED_BLOCK_RE.finditer(text)]
+    for match in ANSWER_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in protected_spans):
+            continue
+        line_end = text.find("\n", match.end())
+        return len(text) if line_end < 0 else line_end + 1
+    return None
+
+
+def _clean_answer_text(text: str) -> str:
+    text = ANSWER_WITHOUT_QUOTES_RE.sub(r"\1\2", text)
+    return ANSWER_TRAILING_PUNCT_RE.sub(r"\1\2", text)
+
+
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if hasattr(value, "tolist"):
+        return _jsonable(value.tolist())
+    return repr(value)
+
+
+def _maybe_dump_rollout(kwargs: dict[str, Any], generated_text: str, tool_results: list[Any]) -> None:
+    dump_dir = os.getenv("RETOOL_DUMP_ROLLOUTS_DIR")
+    if not dump_dir:
+        return
+
+    max_chars = _env_int("RETOOL_DUMP_MAX_CHARS", 20000)
+    record = {
+        "pid": os.getpid(),
+        "raw_prompt": _jsonable(kwargs.get("raw_prompt")),
+        "data_source": _jsonable(kwargs.get("data_source")),
+        "reward_model": _jsonable(kwargs.get("reward_model")),
+        "extra_info": _jsonable(kwargs.get("extra_info")),
+        "index": _jsonable(kwargs.get("index")),
+        "generated_text": generated_text[-max_chars:],
+        "generated_text_truncated": len(generated_text) > max_chars,
+        "tool_results": [
+            {
+                "ok": result.ok,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "error": result.error,
+                "timed_out": result.timed_out,
+                "elapsed_ms": result.elapsed_ms,
+            }
+            for result in tool_results
+        ],
+    }
+    os.makedirs(dump_dir, exist_ok=True)
+    path = os.path.join(dump_dir, f"rollouts-{os.getpid()}.jsonl")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 @register("retool_sandbox_agent")
 class ReToolSandboxAgentLoop(AgentLoopBase):
     """Pause on generated Python code blocks, execute them, then continue."""
@@ -91,7 +181,7 @@ class ReToolSandboxAgentLoop(AgentLoopBase):
         self.max_model_calls = _env_int("RETOOL_MAX_MODEL_CALLS", 4)
         self.max_tool_calls = _env_int("RETOOL_MAX_TOOL_CALLS", 2)
         self.step_max_tokens = _env_int("RETOOL_STEP_MAX_TOKENS", min(768, self.response_length))
-        self.stop_strings = ["</code>", "</answer>"]
+        self.stop_strings = ["</code>"]
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -169,6 +259,18 @@ class ReToolSandboxAgentLoop(AgentLoopBase):
                 response_logprobs.extend(logprobs[: len(token_ids)])
             generated_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
 
+            answer_end = _find_answer_end(generated_text)
+            if answer_end is not None:
+                answer_text = _clean_answer_text(generated_text[:answer_end])
+                cleaned_response_ids = _encode_text(self.tokenizer, answer_text)
+                keep = min(len(response_ids), len(cleaned_response_ids))
+                response_ids = cleaned_response_ids
+                response_mask = response_mask[:keep] + [1] * max(0, len(cleaned_response_ids) - keep)
+                if response_logprobs:
+                    response_logprobs = response_logprobs[:keep] + [0.0] * max(0, len(cleaned_response_ids) - keep)
+                generated_text = answer_text
+                break
+
             executed_this_turn = False
             while len(tool_results) < self.max_tool_calls:
                 block = find_next_unexecuted_code(generated_text)
@@ -197,8 +299,6 @@ class ReToolSandboxAgentLoop(AgentLoopBase):
                 generated_text += interpreter_text
                 executed_this_turn = True
 
-            if "</answer>" in generated_text:
-                break
             if executed_this_turn:
                 continue
             if len(token_ids) < max_tokens:
@@ -229,4 +329,5 @@ class ReToolSandboxAgentLoop(AgentLoopBase):
                 "sandbox_timeouts": sum(1 for result in tool_results if result.timed_out),
             }
         )
+        _maybe_dump_rollout(kwargs, generated_text, tool_results)
         return output

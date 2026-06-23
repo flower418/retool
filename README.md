@@ -21,6 +21,10 @@ requirements.txt             # Python dependencies
 scripts/infer_hf.py          # run a merged HF checkpoint for inference
 scripts/run_verl_sft.sh      # train with verl SFT on the prepared dataset
 scripts/prepare_verl_sft_data.py  # convert JSONL data to verl parquet
+scripts/prepare_math_level_data.py # example dataset filter/export helper
+scripts/run_dapo_smoke.sh     # parameterized veRL RL launcher used for GRPO/DAPO-style runs
+retool_sandbox/              # async Python sandbox, veRL agent loop, reward helpers
+configs/retool_sandbox_agent.yaml # veRL agent-loop registration config
 ```
 
 Do not commit `.env`; it is ignored by Git.
@@ -109,7 +113,8 @@ async with AsyncPythonSandboxPool(
 
 `generate_until(transcript, stop_sequences)` is the adapter you provide for
 vLLM, Transformers, or a remote rollout server. It should generate the next
-assistant chunk with stop strings such as `</code>` and `</answer>`.
+assistant chunk with stop strings such as `</code>` and then end with a final
+`Answer: <final answer>` line.
 
 Run the local demo:
 
@@ -137,6 +142,144 @@ directories, and memory/file limits are applied per worker. This is intended for
 model-generated math/code snippets during rollout, not as a hardened security
 boundary for hostile code.
 
+## RL Experiment Workflow
+
+Use experiments as a spec, not as a hard-coded script. A natural-language request
+should be normalized into these slots before launch:
+
+```yaml
+algorithm: dapo | grpo | ppo | custom
+base_model: /path/to/hf-model-or-merged-ckpt
+dataset:
+  train: /path/to/train.parquet
+  val: /path/to/val.parquet
+  bench_only: optional held-out sets that must not leak into train
+reward:
+  function: module path and function name
+  scale: e.g. +1/-1
+  parser: final-answer extraction and normalization rules
+tool_loop:
+  enabled: true | false
+  max_tool_calls: 3
+  max_model_calls: 5
+rollout:
+  n: 8
+  prompt_length: 1024
+  response_length: 2048
+batch:
+  train_batch_size: 2
+  ppo_mini_batch_size: 1
+checkpointing:
+  save_freq: 50
+  keep: 1
+logging:
+  project: retool-dapo
+  run_name: descriptive-sortable-name
+```
+
+When asking an agent to run an experiment, phrase it at this level:
+
+```text
+Use <algorithm> on <train data>, keep <bench data> only for eval,
+reward is <definition>, sandbox <on/off>, rollout=<n>,
+response=<tokens>, save every <steps>, keep <k> ckpts.
+```
+
+The agent should then produce a run card, verify data/reward/sandbox, launch the
+job, and report PID, log path, checkpoint path, rollout dump path, and W&B link.
+
+## veRL RL Launch Template
+
+The current RL launcher is `scripts/run_dapo_smoke.sh`. Despite the historical
+name, it is parameterized through environment variables and Hydra overrides.
+Use it for GRPO/DAPO-style veRL runs when the requested algorithm matches that
+trainer path. For PPO or a different trainer, inspect the installed veRL config
+and adapt the algorithm-specific overrides instead of pretending this script is
+universal.
+
+Example command shape on a remote training host:
+
+```bash
+cd /root/autodl-tmp/retool
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate zero
+
+RUN_NAME="retool-<algo>-<data>-<key-knobs>-$(date +%Y%m%d_%H%M%S)"
+export VERL_ROOT=/root/verl
+export RETOOL_REPO_DIR=/root/autodl-tmp/retool
+export MODE=lora                 # or full, depending on the run card
+export LORA_RANK=64              # ignored unless MODE=lora
+export PROJECT_NAME=retool-dapo
+export EXPERIMENT_NAME="$RUN_NAME"
+export LOGGER='["console","wandb"]'
+export MODEL_PATH=/path/to/hf-model-or-merged-ckpt
+export TRAIN_FILE=/path/to/train.parquet
+export VAL_FILE=/path/to/val.parquet
+export CKPTS_DIR="/root/autodl-tmp/retool/runs/dapo/${RUN_NAME}"
+export MAX_PROMPT_LENGTH=1024
+export MAX_RESPONSE_LENGTH=2048
+export TRAIN_BATCH_SIZE=2
+export ROLLOUT_N=8
+export PPO_MINI_BATCH_SIZE=1
+export TOTAL_STEPS=1000
+export SAVE_FREQ=50
+export MAX_ACTOR_CKPT_TO_KEEP=1
+export MAX_CRITIC_CKPT_TO_KEEP=1
+
+# Enable only when the experiment needs real code execution during rollout.
+export USE_RETOOL_SANDBOX=True
+export RETOOL_MAX_TOOL_CALLS=3
+export RETOOL_MAX_MODEL_CALLS=5
+export RETOOL_SANDBOX_NO_SITE=0
+export RETOOL_DUMP_ROLLOUTS_DIR="/root/autodl-tmp/retool/debug_rollouts/${RUN_NAME}"
+
+nohup bash scripts/run_dapo_smoke.sh \
+  reward.custom_reward_function.path=/root/autodl-tmp/retool/retool_sandbox/math_reward.py \
+  reward.custom_reward_function.name=compute_score \
+  > "/root/autodl-tmp/retool/logs/${RUN_NAME}.log" 2>&1 &
+```
+
+Before a full run, verify:
+
+- the train and val files exist and do not include bench-only data;
+- one raw row has the expected `prompt`, `reward_model.ground_truth`, and
+  `extra_info` fields;
+- the reward function returns the same keys for correct, wrong, malformed, and
+  formatting-edge examples;
+- the sandbox executes real code if `USE_RETOOL_SANDBOX=True`;
+- `SAVE_FREQ` and checkpoint retention fit the disk budget.
+
+## RL Debugging Checklist
+
+Do not judge a run by process liveness or W&B initialization alone. Watch these
+phases:
+
+```text
+config compose -> dataset load -> model/FSDP/vLLM load -> W&B init
+-> rollout generation -> sandbox tool calls -> reward computation
+-> old log-prob -> actor update -> checkpoint save
+```
+
+Common failure modes:
+
+- **Benchmark leakage**: a held-out set accidentally appears in train or val.
+- **Prompt pollution**: answer-format text such as `(without quotes)` becomes
+  part of the model target and causes reward mismatches.
+- **Fake tool use**: plain inference generates `<interpreter>` text, but no
+  sandbox actually ran.
+- **Reward schema crash**: veRL can fail with `reward_extra_keys` if custom
+  reward branches return different dict keys.
+- **Constant reward**: all `+1`, all `-1`, or all `0` gives no useful
+  within-group learning signal; inspect rollout text before changing LR.
+- **Extractor mismatch**: visible answers such as Markdown, LaTeX wrappers, or
+  unit suffixes may be scored wrong if the parser is too narrow.
+- **Missing final answer**: can be true truncation, a code-loop consuming the
+  response budget, or an extractor that only accepts one answer format.
+- **Stale worker code**: after editing reward or agent-loop code, restart the
+  trainer/Ray workers; running workers may keep old imports.
+- **Raw checkpoint confusion**: veRL/FSDP shards are not HF models. Merge before
+  running normal HF inference or evaluation.
+
 ## Validation
 
 By default, `gen_data.py`:
@@ -144,8 +287,8 @@ By default, `gen_data.py`:
 - requires at least one `<code>...</code>` block;
 - executes generated Python locally;
 - replaces or inserts `<interpreter>...</interpreter>` with real stdout;
-- requires exactly one final `<answer>...</answer>` block at the end;
-- checks that numeric boxed answers match the final interpreter output.
+- requires exactly one final `Answer: <final answer>` line at the end;
+- checks that numeric final answers match the final interpreter output.
 
 Rows that fail validation are not written to the main SFT file.
 

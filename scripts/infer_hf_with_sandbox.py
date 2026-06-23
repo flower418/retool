@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import copy
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -40,11 +41,9 @@ The sandbox will execute the code and append:
 Use the interpreter output as ground truth. Do not invent or manually calculate
 large arithmetic when the sandbox output is available.
 
-The final answer must be the last thing in your response and must use exactly
+The final answer must be the last line of your response and must use exactly
 this format:
-<answer>
-\\boxed{final answer}
-</answer>
+Answer: <final answer>
 
 Problem:
 {question}
@@ -55,6 +54,7 @@ DEFAULT_MODEL_CANDIDATES = (
     "/root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf",
     "/root/autodl-tmp/models/Qwen2.5-3B",
 )
+ANSWER_LINE_RE = re.compile(r"(?im)^\s*Answer\s*:\s*\S[^\n]*")
 
 
 def resolve_default_model() -> str | None:
@@ -161,14 +161,15 @@ def load_tokenizer(path: str):
 
 
 def trim_at_rollout_boundary(text: str) -> tuple[str, str | None]:
-    answer_end = text.find("</answer>")
-    if answer_end >= 0:
-        end = answer_end + len("</answer>")
-        return text[:end], "</answer>"
-
     block = find_next_unexecuted_code(text)
     if block is not None:
         return text[: block.end], "__code_block__"
+
+    match = ANSWER_LINE_RE.search(text)
+    if match is not None:
+        line_end = text.find("\n", match.end())
+        end = len(text) if line_end < 0 else line_end + 1
+        return text[:end], "__answer__"
 
     return text, None
 
@@ -261,7 +262,7 @@ class HFSandboxGenerator:
         stop_criteria = TextStopCriteria(
             self.tokenizer,
             input_len,
-            ("</code>", "</answer>"),
+            ("</code>",),
         )
         generation_kwargs = {
             "max_new_tokens": step_max_new_tokens,

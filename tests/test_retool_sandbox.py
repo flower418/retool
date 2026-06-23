@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from retool_sandbox import (
     AsyncPythonSandboxPool,
+    CodeExecutionResult,
     ModelStep,
     SandboxLimits,
     batch_rollout_with_sandbox,
@@ -49,6 +50,14 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(after.ok)
         self.assertEqual(after.stdout.strip(), "alive")
 
+    def test_interpreter_text_compacts_errors(self):
+        result = CodeExecutionResult(
+            ok=False,
+            stderr="Traceback (most recent call last):\n  File \"snippet.py\", line 1\nNameError: name 'd' is not defined\n",
+        )
+
+        self.assertEqual(result.interpreter_text(), "[sandbox error] NameError: name 'd' is not defined")
+
     async def test_execute_next_unexecuted_code(self):
         content = "Compute.\n<code>\n```python\nprint(6 * 7)\n```\n</code>"
         async with AsyncPythonSandboxPool(
@@ -78,8 +87,8 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
                 stop_text="</code>",
             ),
             ModelStep(
-                text="\nSo the answer is 42.\n<answer>\n\\boxed{42}\n",
-                stop_text="</answer>",
+                text="\nSo the answer is 42.\nAnswer: 42\n",
+                finished=True,
             ),
         ]
 
@@ -95,7 +104,7 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stop_reason, "answer")
         self.assertEqual(len(result.tool_results), 1)
         self.assertIn("<interpreter>42</interpreter>", result.text)
-        self.assertTrue(result.text.rstrip().endswith("</answer>"))
+        self.assertTrue(result.text.rstrip().endswith("Answer: 42"))
 
     async def test_batch_rollout_with_sandbox(self):
         async def generate_until(transcript, _stops):
@@ -107,8 +116,8 @@ class SandboxTests(unittest.IsolatedAsyncioTestCase):
                 )
             value = transcript.rsplit("<interpreter>", 1)[1].split("</interpreter>", 1)[0]
             return ModelStep(
-                text=f"\n<answer>\n\\boxed{{{value}}}\n",
-                stop_text="</answer>",
+                text=f"\nAnswer: {value}\n",
+                finished=True,
             )
 
         prompts = [f"question {i}" for i in range(4)]

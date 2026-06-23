@@ -19,7 +19,7 @@ FENCED_CODE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 INTERPRETER_RE = re.compile(r"\s*<interpreter>.*?</interpreter>", re.DOTALL)
-ANSWER_DONE_RE = re.compile(r"<answer>.*?</answer>\s*$", re.DOTALL)
+ANSWER_DONE_RE = re.compile(r"(?im)^\s*Answer\s*:\s*\S[^\n]*\s*$")
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,7 @@ async def rollout_with_sandbox(
     *,
     max_model_calls: int = 16,
     max_tool_calls: int = 8,
-    stop_sequences: Sequence[str] = ("</code>", "</answer>"),
+    stop_sequences: Sequence[str] = ("</code>",),
 ) -> RolloutResult:
     """Run a text rollout that pauses on code blocks and feeds back outputs.
 
@@ -218,7 +218,7 @@ async def batch_rollout_with_sandbox(
     rollout_concurrency: int = 64,
     max_model_calls: int = 16,
     max_tool_calls: int = 8,
-    stop_sequences: Sequence[str] = ("</code>", "</answer>"),
+    stop_sequences: Sequence[str] = ("</code>",),
 ) -> list[RolloutResult]:
     """Run many independent ReTool rollouts concurrently.
 

@@ -14,15 +14,11 @@ Immediately after each code block, include the sandbox output as:
 
 Keep the solution concise and coherent. Do not include failed attempts, internal deliberation about formatting, or unrelated commentary. Return only the assistant solution content.
 
-Use exactly one final answer block. It must be the last text in your response; do not write anything after `</answer>`. The last part of your response must be exactly in the following format:
-<answer>
-\boxed{The final answer goes here.}
-</answer>
+Use exactly one final answer line. It must be the last line in your response; do not write anything after it. The last line of your response must be exactly in the following format:
+Answer: The final answer goes here.
 
 *user question:*
 {question}
 
-Remember: include at least one `<code>` block, make the final printed line of the last code block equal to the final answer, and place exactly one final answer at the very end using the format:
-<answer>
-\boxed{The final answer goes here.}
-</answer>
+Remember: include at least one `<code>` block, make the final printed line of the last code block equal to the final answer when practical, and place exactly one final answer line at the very end using the format:
+Answer: The final answer goes here.

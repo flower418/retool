@@ -10,7 +10,7 @@ Each output line is a two-message SFT conversation:
 
 The assistant content is produced by an OpenAI-compatible chat model and should
 contain executable <code> blocks, matching <interpreter> outputs, and a final
-<answer> block.
+`Answer: <final answer>` line.
 """
 import argparse
 import asyncio
@@ -166,8 +166,8 @@ def run_python_code(code: str, timeout: float) -> tuple[str | None, str | None]:
     return proc.stdout, None
 
 
-def extract_boxed_answer(content: str) -> str | None:
-    match = re.search(r"<answer>\s*\\boxed\{([^{}]+)\}\s*</answer>\s*$", content.strip(), re.S)
+def extract_final_answer(content: str) -> str | None:
+    match = re.search(r"(?im)^\s*Answer\s*:\s*(\S[^\n]*)\s*$", content.strip())
     if not match:
         return None
     return match.group(1).strip()
@@ -175,8 +175,8 @@ def extract_boxed_answer(content: str) -> str | None:
 
 def validate_final_answer_against_last_output(content: str) -> list[str]:
     issues = []
-    boxed = extract_boxed_answer(content)
-    if boxed is None:
+    final_answer = extract_final_answer(content)
+    if final_answer is None:
         return issues
 
     pairs = extract_code_interpreter_pairs(content)
@@ -185,13 +185,13 @@ def validate_final_answer_against_last_output(content: str) -> list[str]:
 
     last_output = pairs[-1][1].strip()
     last_line = last_output.splitlines()[-1].strip() if last_output else ""
-    if re.fullmatch(r"-?\d+", boxed) and not re.fullmatch(r"-?\d+", last_line):
+    if re.fullmatch(r"-?\d+", final_answer) and not re.fullmatch(r"-?\d+", last_line):
         issues.append(
             f"last interpreter output line {last_line!r} is not a numeric final answer"
         )
-    elif re.fullmatch(r"-?\d+", boxed) and re.fullmatch(r"-?\d+", last_line):
-        if boxed != last_line:
-            issues.append(f"boxed answer {boxed!r} does not match last interpreter output {last_line!r}")
+    elif re.fullmatch(r"-?\d+", final_answer) and re.fullmatch(r"-?\d+", last_line):
+        if final_answer != last_line:
+            issues.append(f"final answer {final_answer!r} does not match last interpreter output {last_line!r}")
     return issues
 
 
@@ -202,14 +202,13 @@ def validate_assistant_content(content: str, execute_code: bool = False, exec_ti
         issues.append("missing <code> block")
     if "<interpreter>" not in content or "</interpreter>" not in content:
         issues.append("missing <interpreter> block")
-    if "<answer>" not in content or "</answer>" not in content:
-        issues.append("missing <answer> block")
-    if content.count("<answer>") != 1 or content.count("</answer>") != 1:
-        issues.append("answer block count must be exactly one")
-    if "</answer>" in content and not stripped.endswith("</answer>"):
-        issues.append("answer block must be at the end")
-    if "\\boxed{" not in content:
-        issues.append("missing boxed final answer")
+    answer_lines = re.findall(r"(?im)^\s*Answer\s*:\s*\S[^\n]*$", content)
+    if not answer_lines:
+        issues.append("missing final Answer line")
+    if len(answer_lines) != 1:
+        issues.append("final Answer line count must be exactly one")
+    if answer_lines and stripped.splitlines()[-1].strip() != answer_lines[-1].strip():
+        issues.append("final Answer line must be the last line")
     code_open = len(re.findall(r"<code>\s*```python", content))
     code_close = len(re.findall(r"</code>", content))
     interpreter_open = len(re.findall(r"<interpreter>", content))
@@ -269,7 +268,7 @@ async def call_one(
                         "content": (
                             "Regenerate the full solution from scratch. The previous output violated "
                             f"these requirements: {', '.join(last_invalid['issues'])}. "
-                            "Use exactly one final <answer> block, put it at the very end, and include "
+                            "Use exactly one final Answer: line, put it at the very end, and include "
                             "at least one <code> block followed by its exact <interpreter> output."
                         ),
                     },

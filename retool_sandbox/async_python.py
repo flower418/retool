@@ -42,7 +42,12 @@ class CodeExecutionResult:
         if self.stdout:
             parts.append(self.stdout.rstrip())
         if self.stderr and (not self.ok or self.stderr_truncated):
-            parts.append(self.stderr.rstrip())
+            stderr = self.stderr.rstrip()
+            if self.ok:
+                parts.append(stderr)
+            else:
+                last_line = next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), stderr)
+                parts.append(f"[sandbox error] {last_line}")
         if self.error and not self.stderr:
             parts.append(self.error.rstrip())
         if self.timed_out:

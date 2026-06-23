@@ -2,7 +2,7 @@
 """Minimal ReTool sandbox rollout demo.
 
 Real rollout backends should replace `generate_until` with vLLM/Transformers
-generation that stops on `</code>` and `</answer>`.
+generation that stops on `</code>` and emits a final `Answer:` line.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ async def main() -> None:
             stop_text="</code>",
         ),
         ModelStep(
-            text="\nThe computation gives 5050.\n<answer>\n\\boxed{5050}\n",
-            stop_text="</answer>",
+            text="\nThe computation gives 5050.\nAnswer: 5050\n",
+            finished=True,
         ),
     ]
 
