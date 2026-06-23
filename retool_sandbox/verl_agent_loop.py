@@ -29,14 +29,17 @@ PROTECTED_BLOCK_RE = re.compile(
 
 RETOOL_PROMPT_PREFIX = """You have access to a Python sandbox during generation.
 Follow this protocol strictly:
-1. Before any prose, write one short Python block that computes or verifies the
-   key quantity. The block must print the result you need.
-2. Treat the interpreter output as the source of truth. If the code errors,
+1. Before any prose, write one short self-contained Python block that computes
+   or verifies the final answer. The block must include all needed imports and
+   variables, because each sandbox call runs independently.
+2. The final printed line of the block must be only the final answer value you
+   plan to put after `Answer:`.
+3. Treat the interpreter output as the source of truth. If the code errors,
    write a corrected short Python block.
-3. Keep the solution concise after the sandbox result.
-4. If the first code block succeeds, do not write more code; immediately write
-   the final answer line.
-5. End with exactly one final line in this format: Answer: <final answer>
+4. Keep the solution concise after the sandbox result.
+5. After any successful interpreter output, do not write more code; immediately
+   write the final answer line.
+6. End with exactly one final line in this format: Answer: <final answer>
    Do not use <answer> tags, boxes, or any text after the final answer line.
 
 Use exactly this code format:
@@ -178,8 +181,8 @@ class ReToolSandboxAgentLoop(AgentLoopBase):
         super().__init__(*args, **kwargs)
         self.prompt_length = self.rollout_config.prompt_length
         self.response_length = self.rollout_config.response_length
-        self.max_model_calls = _env_int("RETOOL_MAX_MODEL_CALLS", 4)
-        self.max_tool_calls = _env_int("RETOOL_MAX_TOOL_CALLS", 2)
+        self.max_model_calls = _env_int("RETOOL_MAX_MODEL_CALLS", 6)
+        self.max_tool_calls = _env_int("RETOOL_MAX_TOOL_CALLS", 3)
         self.step_max_tokens = _env_int("RETOOL_STEP_MAX_TOKENS", min(768, self.response_length))
         self.stop_strings = ["</code>"]
 

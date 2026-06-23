@@ -246,6 +246,8 @@ Before a full run, verify:
   `extra_info` fields;
 - the reward function returns the same keys for correct, wrong, malformed, and
   formatting-edge examples;
+- rollout prompts tell the model that every sandbox call is independent and
+  each code block must be self-contained;
 - the sandbox executes real code if `USE_RETOOL_SANDBOX=True`;
 - `SAVE_FREQ` and checkpoint retention fit the disk budget.
 

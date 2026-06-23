@@ -1,6 +1,6 @@
 Solve the following problem step by step. You now have the ability to write executable Python code to enhance your reasoning process. The Python code will be executed by an external sandbox, and the output wrapped in `<interpreter>output_str</interpreter>` can be returned to aid your reasoning and help you arrive at the final answer.
 
-You must include at least one Python code snippet for calculation, enumeration, verification, or symbolic manipulation. Prefer a single concise code block. The code must be a complete Python script with any necessary imports and explicit `print(...)` statements. The final printed line of the last code block should be only the final numeric answer.
+You must include at least one Python code snippet for calculation, enumeration, verification, or symbolic manipulation. Prefer a single concise code block. The code must be a complete, self-contained Python script with any necessary imports, variable definitions, and explicit `print(...)` statements. Each sandbox call runs independently, so do not rely on variables from a previous code block. The final printed line of the last code block should be only the final answer.
 
 Each code snippet must be wrapped exactly as:
 <code>
@@ -12,7 +12,7 @@ code snippet
 Immediately after each code block, include the sandbox output as:
 <interpreter>output_str</interpreter>
 
-Keep the solution concise and coherent. Do not include failed attempts, internal deliberation about formatting, or unrelated commentary. Return only the assistant solution content.
+Keep the solution concise and coherent. After a successful interpreter output, do not write another code block; immediately finish with the final answer line. Do not include failed attempts, internal deliberation about formatting, or unrelated commentary. Return only the assistant solution content.
 
 Use exactly one final answer line. It must be the last line in your response; do not write anything after it. The last line of your response must be exactly in the following format:
 Answer: The final answer goes here.

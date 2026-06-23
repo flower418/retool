@@ -27,7 +27,7 @@ from retool_sandbox import (
 
 DEFAULT_PROMPT_TEMPLATE = """Solve the following problem. You must use the Python sandbox at least once.
 
-Write a complete Python script in this exact format:
+Write a complete, self-contained Python script in this exact format:
 <code>
 ```python
 result = ...
@@ -35,11 +35,15 @@ print(result)
 ```
 </code>
 
+Each sandbox call runs independently, so include all needed imports and
+variables in every code block. The final printed line must be only the final
+answer value.
+
 The sandbox will execute the code and append:
 <interpreter>output</interpreter>
 
-Use the interpreter output as ground truth. Do not invent or manually calculate
-large arithmetic when the sandbox output is available.
+Use the interpreter output as ground truth. After any successful interpreter
+output, do not write another code block; immediately write the final answer.
 
 The final answer must be the last line of your response and must use exactly
 this format:
