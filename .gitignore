@@ -13,3 +13,4 @@ data/
 logs/
 runs/
 wandb/
+debug_rollouts/
