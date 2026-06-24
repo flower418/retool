@@ -6,8 +6,8 @@ This repository implements direct SFT data synthesis for ReTool-style training. 
 
 - `gen_data.py`: async question-to-SFT generator with retry and resume support.
 - `prompts/solve_with_code.txt`: user prompt template used by `--prompt`.
-- `sft_train.jsonl`: locally generated SFT examples as two-message arrays.
-- `retool_sft_merged.jsonl`: Hugging Face-style rows with `{"messages": ...}` for training.
+- `data/sft/sft_train.jsonl`: locally generated SFT examples as two-message arrays.
+- `data/sft/retool_sft_merged.jsonl`: Hugging Face-style rows with `{"messages": ...}` for training.
 - Optional batch inputs can be supplied as external JSONL files with a required `question` field.
 - `.env.example`: documented environment variables. Keep local secrets in `.env`.
 - `requirements.txt`: Python runtime dependencies.
@@ -32,7 +32,7 @@ set -a; source .env; set +a
 Run a small generation job:
 
 ```bash
-python gen_data.py --question "What is the sum of all integers from 1 to 100?" --out sft_train.jsonl --model "$GEN_MODEL"
+python gen_data.py --question "What is the sum of all integers from 1 to 100?" --out data/sft/sft_train.jsonl --model "$GEN_MODEL"
 ```
 
 Check syntax quickly:
@@ -47,7 +47,7 @@ Use Python 3 with 4-space indentation and descriptive snake_case names for funct
 
 ## Testing Guidelines
 
-No formal test suite is currently present. For changes to generation logic, run `python -m py_compile gen_data.py` and a one-question smoke test with a temporary output path. Verify that output rows are two-message arrays and that metadata records `model`, `finish_reason`, and any `validation_issues`.
+Run `python -m py_compile gen_data.py retool_sandbox/*.py scripts/*.py tests/*.py` for syntax checks and `python -m pytest tests` for the sandbox/reward regression suite. For changes to generation logic, also run a one-question smoke test with a temporary output path. Verify that output rows are two-message arrays and that metadata records `model`, `finish_reason`, and any `validation_issues`.
 
 ## Commit & Pull Request Guidelines
 

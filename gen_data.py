@@ -429,7 +429,7 @@ def main():
     ap = argparse.ArgumentParser(description="Generate direct ReTool SFT messages from questions")
     ap.add_argument("--in", dest="infile", default=None, help="JSONL input with a required question field")
     ap.add_argument("--question", default=None, help="Generate one SFT example from this question")
-    ap.add_argument("--out", dest="outfile", default="sft_train.jsonl")
+    ap.add_argument("--out", dest="outfile", default="data/sft/sft_train.jsonl")
     ap.add_argument("--prompt", default="prompts/solve_with_code.txt")
     ap.add_argument("--model", default=os.environ.get("GEN_MODEL", "deepseek-v4-pro"))
     ap.add_argument("--concurrency", type=int, default=1)

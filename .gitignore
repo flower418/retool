@@ -9,8 +9,11 @@ __pycache__/
 venv/
 .pytest_cache/
 bench/
-data/
+data/*
+!data/sft/
+!data/sft/*.jsonl
 logs/
 runs/
 wandb/
 debug_rollouts/
+release_assets/
