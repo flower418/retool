@@ -246,18 +246,83 @@ https://github.com/flower418/retool/releases/tag/retool-rl-gs200-fused-hf
 docs/checkpoints.md
 ```
 
-## 4. 当前定性观察
+## 4. 手工对话评测与核心现象
 
-目前还没有整理成正式表格的人工对话评测。已有观察更接近开发过程中的 sanity
-check：
+为了检查训练是否真的改变了模型和工具的关系，使用
+`scripts/manual_dialog_eval.py` 跑了一组小规模手工对话评测。这个评测不是正式
+benchmark，只包含 6 道可人工核验的数学题，目的是比较 base / SFT / RL 三个
+checkpoint 在同一 sandbox prompt 下的行为差异。
 
-1. SFT 后模型更容易输出 ReTool 风格的代码块和最终答案行；
-2. 真实 sandbox 推理路径可以执行模型生成的 Python 并把 stdout 写回上下文；
-3. RL 后 checkpoint 可以加载并进行 sandbox 推理；
-4. 但模型仍会出现缺失最终答案、答案行格式不稳定、长输出耗尽预算、代码结果正确
-   但最终答案写错等问题。
+评测使用同一个答案协议和同一个真实 sandbox loop：模型生成 `<code>` 代码块后，
+Python sandbox 执行代码，并把 stdout 写回 `<interpreter>...</interpreter>`。
+最终仍以最后一行 `Answer: ...` 作为判分对象。
 
-因此，当前 README 不报告 AIME/MATH benchmark 分数。仓库里有
+| model | correct | accuracy | tool calls | avg tool calls |
+| --- | ---: | ---: | ---: | ---: |
+| base Qwen2.5-3B | 1 / 6 | 16.7% | 0 | 0.00 |
+| SFT checkpoint | 3 / 6 | 50.0% | 5 | 0.83 |
+| RL checkpoint | 4 / 6 | 66.7% | 7 | 1.17 |
+
+逐题结果如下：
+
+| question | expected | base | SFT | RL |
+| --- | ---: | ---: | ---: | ---: |
+| `sum_1_to_100` | 5050 | 5050 | 5050 | 5050 |
+| `stairs_6_steps_123` | 24 | 20 | missing answer | 21 |
+| `mod_17017_power` | 1 | 11 | 1 | 1 |
+| `square_divisors` | 24 | 12 | 24 | 24 |
+| `ordered_gcd_pairs` | 19 | 10 | 25 | 25 |
+| `digit_sum_to_500` | 30 | 10 | 28 | 30 |
+
+这组结果最重要的现象不是 6 题上的小样本准确率，而是 RL checkpoint 出现了更明确
+的“工具反馈校正”行为。以 `digit_sum_to_500` 为例，题目是：
+
+```text
+How many positive integers n <= 500 have digit sum 7?
+```
+
+RL 模型先用组合计数得到了错误中间结论 `372`，随后主动转向 sandbox 枚举验证：
+
+````text
+But wait, let me verify with code. I'll use the Python sandbox to compute the
+digit sums for numbers up to 500 and count how many have a sum of 7.
+
+<code>
+```python
+count = 0
+for n in range(1, 501):
+    digit_sum = sum(int(d) for d in str(n))
+    if digit_sum == 7:
+        count += 1
+print(count)
+```
+</code>
+<interpreter>30</interpreter>
+
+The code output is 30. So, the answer is 30.
+
+Answer: 30
+````
+
+这个案例体现了 ReTool RL 的本质目标：模型不只是学习“输出一个看起来像代码的
+格式”，而是学习在推理过程中把外部执行结果当作更高优先级的证据。换句话说，RL
+阶段强化的不是纯粹的内在反思能力，而是“生成可执行检验 -> 读取环境反馈 ->
+覆盖错误先验 -> 写出最终答案”的行为模式。对于枚举、模运算、代数化简这类可以
+直接计算的问题，这种模式能把一部分本来会错的推理拉回正确答案。
+
+但这不等价于模型已经稳定具备数学反思能力。`ordered_gcd_pairs` 是一个反例：
+RL 模型也调用了 sandbox，但它写出的代码只统计了 6 的倍数对，没有真正检查
+`gcd(a, b) == 6`，因此 sandbox 只是忠实执行了错误问题建模，最终仍错成 25。
+这说明 sandbox 能校验代码执行结果，却不能自动校验“代码是否表达了正确数学问题”。
+
+因此当前结论应当谨慎表述为：
+
+1. base 基本不会遵守工具调用协议；
+2. SFT 能让模型学到部分 ReTool 格式和工具调用习惯；
+3. RL 进一步提高了工具调用率，并出现了工具反馈纠错的行为；
+4. 但模型仍会写出语义错误的代码，或在简单递推题上坚持错误先验。
+
+当前 README 仍不报告 AIME/MATH benchmark 分数。仓库里有
 `scripts/eval_aime2024_models.py`，但正式 benchmark 需要重新跑完并检查输出质量后
 再写入结果。
 
@@ -288,16 +353,18 @@ RL reward 非常依赖最终答案解析，也不能直接替代独立 benchmark
 
 因此 reward 需要和 rollout dump 一起审计，不能只看 W&B 上的平均 reward。
 
-### 5.3 工具使用还不稳定
+### 5.3 工具使用不等于问题建模正确
 
-训练日志显示工具调用链路是通的，但人工观察里仍有几类失败：
+手工评测显示 RL checkpoint 的工具调用率高于 SFT 和 base，但工具调用本身并不
+保证正确。当前主要失败模式有三类：
 
-1. 模型不调用工具，直接长文本推理；
-2. 模型调用工具后继续反复生成代码，消耗 response budget；
-3. 代码执行结果正确，但最终答案行没有遵守协议；
-4. response_length 触顶导致 `missing_final_answer`。
+1. 模型不调用工具或没有输出规范 `Answer:` 行，例如 SFT 在楼梯题上长文本发散；
+2. 模型调用工具，但代码表达的是错误数学模型，例如 gcd pair 题只数了 6 的倍数对；
+3. 模型把 sandbox 输出当作 ground truth，但如果代码本身漏了约束，最终答案仍会错。
 
-这说明 prompt、stop condition、max tool/model calls 和最终答案监督还需要一起优化。
+这说明下一步优化不能只奖励“调用了工具”，还需要让模型学会把自然语言条件完整
+翻译成可执行检查。更合理的训练信号可能包括：执行代码中是否覆盖原题约束、是否
+做了 brute-force 交叉验证、是否在最终答案前比较了手推结果和工具结果。
 
 ### 5.4 当前 RL 不是完整收敛实验
 
