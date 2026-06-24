@@ -1,63 +1,76 @@
-# ReTool Training Pipeline
+# ReTool：面向代码增强数学推理的 SFT + Sandbox RL 训练链路
 
-This repository contains the ReTool workflow for code-assisted math training:
+## 摘要
+
+本项目实现了一条面向数学推理模型的 ReTool 训练链路：先用带代码执行痕迹的
+监督微调数据让模型学会“写代码、读执行结果、给最终答案”的格式，再在 veRL
+中接入异步 Python sandbox，让模型在 RL rollout 阶段真正执行生成的代码，并用
+最终答案 reward 训练模型。最终产物是一个可用 Hugging Face/Transformers 加载
+的融合后 RL checkpoint：
 
 ```text
-question data -> verified SFT rows -> veRL SFT
--> sandboxed DAPO/GRPO-style RL -> merged HF checkpoint
--> sandbox inference and evaluation
+retool-math-l1-l3-dapo-lora-r64-global_step_200-fused-hf
 ```
 
-All trained responses use one final-answer contract:
+当前仓库记录的是完整工程链路和可复现实验配置。正式 benchmark 还没有作为结果
+报告；目前可确认的结果来自训练日志、checkpoint 产物、sandbox smoke，以及少量
+人工对话观察。
+
+## 1. 研究目标
+
+普通数学模型经常会“口头写代码”，但并没有真实执行，也不会稳定地把执行结果
+反馈进推理过程。这个项目关注的问题是：
+
+1. 如何把 ReTool 风格的代码辅助推理变成可训练的数据格式；
+2. 如何在 RL rollout 阶段接入真实 sandbox，而不是让模型伪造
+   `<interpreter>...</interpreter>`；
+3. 如何把最终答案格式和 reward 对齐，减少“推理过程看起来对但最终答案不可判分”
+   的情况；
+4. 如何在有限显存和磁盘预算下完成 SFT、RL、checkpoint merge、发布和复现。
+
+核心约束是所有模型响应最终必须落到同一个答案协议：
 
 ```text
 Answer: <final answer>
 ```
 
-The sandbox and reward code are built around that line. Correct final answers
-score as correct; wrong, malformed, or missing final answers do not.
+reward 以最后的 `Answer:` 行为主要判分对象。代码执行只是帮助模型得到答案，
+不会替代最终答案。
 
-## Layout
+## 2. 完整链路
+
+整体流程如下：
 
 ```text
-gen_data.py                         # question -> verified SFT message rows
-prompts/solve_with_code.txt         # SFT generation prompt template
-data/sft/train.jsonl                # SFT train set, JoeYing/ReTool-SFT + local rows
-data/rl/math_l1_l3/                 # RL MATH level 1-3 prompt and metadata
-retool_sandbox/                     # async Python sandbox, agent loop, reward
-configs/retool_sandbox_agent.yaml   # veRL agent-loop registration
-scripts/run_verl_sft.sh             # veRL SFT launcher
-scripts/run_dapo_smoke.sh           # parameterized DAPO/GRPO-style RL launcher
-scripts/infer_hf.py                 # plain HF generation
-scripts/infer_hf_with_sandbox.py    # HF generation with real sandbox execution
-scripts/eval_aime2024_models.py     # base/SFT/RL AIME-style comparison
-scripts/prepare_*.py                # data conversion/export helpers
-docs/checkpoints.md                 # published checkpoint restore details
-tests/                              # reward and sandbox regression tests
+问题数据
+  -> 生成/整理 ReTool SFT messages
+  -> veRL SFT，得到 merged HF SFT checkpoint
+  -> 构造 MATH level 1-3 RL prompt parquet
+  -> veRL DAPO/GRPO 风格 rollout
+  -> 异步 Python sandbox 执行代码
+  -> math reward 根据最终答案判分
+  -> LoRA/FSDP checkpoint merge + fuse
+  -> 发布最终 HF checkpoint
 ```
 
-Do not commit `.env`, logs, `runs/`, `wandb/`, or temporary release assets.
+### 2.1 SFT 数据
 
-## Setup
+SFT 数据位于：
 
-```bash
-conda create -n retool python=3.11 -y
-conda activate retool
-pip install -r requirements.txt
-cp .env.example .env
+```text
+data/sft/train.jsonl
 ```
 
-Set these in `.env` for SFT data generation:
+它使用 Hugging Face chat messages 格式：
 
-```bash
-OPENAI_API_KEY=replace-with-your-api-key
-OPENAI_BASE_URL=https://api.deepseek.com
-GEN_MODEL=deepseek-v4-pro
+```json
+{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
 ```
 
-## Generate SFT Rows
+当前文件包含 2002 行：主体来自 `JoeYing/ReTool-SFT`，并合入少量本项目生成样例。
+只有 2 行的临时样例文件已经删除，避免把 smoke 输出误当成训练集。
 
-Generate one verified ReTool-style example:
+如需继续生成 SFT 样例，默认写入 ignored 文件：
 
 ```bash
 set -a; source .env; set +a
@@ -67,85 +80,65 @@ python gen_data.py \
   --model "$GEN_MODEL"
 ```
 
-Each row is a two-message JSON array:
+`gen_data.py` 会执行生成的 Python 代码， materialize 真实
+`<interpreter>...</interpreter>` 输出，并要求末尾存在唯一的 `Answer:` 行。
 
-```json
-[
-  {"role": "user", "content": "..."},
-  {"role": "assistant", "content": "..."}
-]
-```
+### 2.2 SFT 训练
 
-For batch generation, pass a JSONL file with a required `question` field:
+SFT 基座为 Qwen2.5-3B，训练入口是：
 
 ```bash
-python gen_data.py --in questions.jsonl --out data/sft/generated.jsonl --concurrency 4
-```
-
-`gen_data.py` validates generated code by default: it executes Python snippets,
-materializes real `<interpreter>...</interpreter>` output, and requires a final
-`Answer: ...` line before writing to the main output.
-
-## Sandbox Inference
-
-Plain model generation is not tool use. Use the sandbox path when you need real
-ReTool execution:
-
-```bash
-python scripts/infer_hf_with_sandbox.py \
-  --model /path/to/hf-model-or-checkpoint \
-  --question "Compute 123456789123456789 * 987654321987654321." \
-  --max-new-tokens 4096 \
-  --step-max-new-tokens 1024 \
-  --max-tool-calls 4 \
-  --max-model-calls 8
-```
-
-The rollout loop is:
-
-```text
-model generates until </code>
--> sandbox executes the Python block
--> real <interpreter>stdout</interpreter> is appended
--> model continues until Answer: ...
-```
-
-Run the local sandbox demo with:
-
-```bash
-python examples/sandbox_rollout_demo.py
-```
-
-## Training
-
-SFT on the remote veRL host:
-
-```bash
-cd /root/autodl-tmp/retool
-source /root/miniconda3/etc/profile.d/conda.sh
-conda activate zero
-
 DATA_JSONL=/root/autodl-tmp/retool/data/sft/train.jsonl \
 MODEL_PATH=/root/autodl-tmp/models/Qwen2.5-3B \
 bash scripts/run_verl_sft.sh
 ```
 
-Prepare the default RL MATH level 1-3 prompt dataset:
+训练后使用 veRL/FSDP checkpoint merge，得到可直接加载的 HF checkpoint：
+
+```text
+/root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf
+```
+
+### 2.3 RL 数据
+
+RL prompt 数据定义在：
+
+```text
+data/rl/math_l1_l3/
+```
+
+提交到仓库中的文件是：
+
+```text
+prompt.txt   # MATH level 1-3 prompt 模板
+meta.json    # 数据来源、level/subject 统计、生成命令
+README.md    # 数据说明
+```
+
+生成的 parquet 文件不进 git。默认生成命令：
 
 ```bash
 python scripts/prepare_math_level_data.py
 ```
 
-This writes generated parquet files under `data/rl/math_l1_l3/`; those files are
-ignored, while the prompt template and metadata are committed.
+当前 RL 数据规格：
 
-DAPO/GRPO-style RL uses the parameterized launcher:
+| 字段 | 值 |
+| --- | --- |
+| 数据源 | `EleutherAI/hendrycks_math` |
+| level | 1 到 3 |
+| unique rows before split | 3504 |
+| repeat | 10 |
+| train rows after repeat | 33760 |
+| val rows | 128 |
+| subjects | prealgebra, algebra, number theory, counting/probability, geometry, intermediate algebra, precalculus |
+
+### 2.4 Sandbox RL
+
+RL 训练使用 `scripts/run_dapo_smoke.sh`。这个脚本名字里仍有 smoke，但已经参数化，
+可以通过环境变量启动 DAPO/GRPO 风格训练：
 
 ```bash
-cd /root/autodl-tmp/retool
-source /root/miniconda3/etc/profile.d/conda.sh
-conda activate zero
-
 export MODE=lora
 export LORA_RANK=64
 export MODEL_PATH=/root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf
@@ -153,6 +146,7 @@ export TRAIN_FILE=/root/autodl-tmp/retool/data/rl/math_l1_l3/train.parquet
 export VAL_FILE=/root/autodl-tmp/retool/data/rl/math_l1_l3/val.parquet
 export USE_RETOOL_SANDBOX=True
 export ROLLOUT_N=8
+export TRAIN_BATCH_SIZE=2
 export MAX_RESPONSE_LENGTH=2048
 export SAVE_FREQ=50
 
@@ -163,47 +157,218 @@ nohup bash scripts/run_dapo_smoke.sh \
   > logs/${EXPERIMENT_NAME:-retool-dapo}.log 2>&1 &
 ```
 
-Before launching a full RL run, verify train/val split hygiene, reward schema
-stability, sandbox execution, checkpoint retention, and rollout dumps. Do not
-judge a run by process liveness or W&B initialization alone.
-
-## Checkpoints
-
-The published inference-ready RL checkpoint is:
+真实工具链路由 `retool_sandbox/` 提供：
 
 ```text
-retool-math-l1-l3-dapo-lora-r64-global_step_200-fused-hf
+模型生成到 </code>
+  -> AsyncPythonSandboxPool 执行代码
+  -> 真实 stdout 写回 <interpreter>...</interpreter>
+  -> 模型继续生成
+  -> reward 读取最后的 Answer: ...
 ```
 
-It is available as split tar assets on the GitHub release
-`retool-rl-gs200-fused-hf`. Restore instructions and checksums are in
-[`docs/checkpoints.md`](docs/checkpoints.md).
+这点很重要：`scripts/infer_hf.py` 是普通 generation，里面出现的
+`<interpreter>` 文本并不代表真实执行。真实工具调用必须使用
+`scripts/infer_hf_with_sandbox.py` 或 veRL agent loop。
 
-Use the merged/fused HF directory for normal inference. Raw veRL/FSDP checkpoint
-directories under `runs/dapo/.../global_step_*` are not standard Transformers
-models until merged.
+## 3. 训练结果
 
-## Evaluation
+### 3.1 SFT loss
 
-Compare base, SFT, and RL checkpoints on the same held-out set:
+SFT 训练共形成 3 个连续阶段的 merged checkpoint。最终阶段日志显示验证 loss
+持续下降：
+
+| 阶段 | 训练步 | final `val/loss` |
+| --- | ---: | ---: |
+| epoch 1 | global_step 941 | 0.5525964499 |
+| epoch 2 | global_step 941 | 0.5473101735 |
+| epoch 3 | global_step 941 | 0.5376862288 |
+
+epoch 3 内部验证 loss 也从 step 100 的 `0.54754` 降到 step 941 的
+`0.53769`。这个结果说明模型确实学到了 SFT 数据分布和输出格式，但它不等价于
+数学能力已经可靠提升。
+
+### 3.2 RL 训练信号
+
+最终保留的 RL run 是：
+
+```text
+retool-math-l1-l3-dapo-lora-r64-sandbox-b2-n8-r2048-s50-1000-fixreward-20260624_023756
+```
+
+关键配置：
+
+| 字段 | 值 |
+| --- | --- |
+| base model | epoch-3 SFT merged HF checkpoint |
+| algorithm path | DAPO/GRPO 风格 veRL PPO trainer |
+| mode | LoRA |
+| LoRA rank | 64 |
+| train batch size | 2 |
+| rollout n | 8 |
+| max response length | 2048 |
+| save freq | 50 |
+| final saved step | global_step 200 |
+
+训练日志中能确认几件事：
+
+1. reward 不是常数。若干保存点上 `critic/score/min=-1.0`、
+   `critic/score/max=1.0`，说明同组采样里同时存在正负样本。
+2. agent loop 确实在运行。后期日志中 `num_turns/mean` 约为 2.7，
+   `tool_calls` 非零，说明 rollout 不是纯文本 generation。
+3. 训练没有跑满原计划 1000 step，而是在 `global_step_200` 处保存并 merge
+   了最终 checkpoint。这个 checkpoint 是当前公开产物，不应把它描述成完整
+   收敛后的模型。
+
+部分日志点：
+
+| step | `critic/score/mean` | `critic/score/max` | `critic/score/min` | `response_length/mean` | `num_turns/mean` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 50 | -0.625 | 1.0 | -1.0 | 802.75 | 2.8125 |
+| 100 | -0.500 | 1.0 | -1.0 | 1122.38 | 2.6250 |
+| 150 | -0.250 | 1.0 | -1.0 | 703.69 | 2.9375 |
+| 199 | -0.500 | 1.0 | -1.0 | 817.63 | 2.6875 |
+
+这些指标只能说明训练链路、reward、sandbox 和 checkpoint 保存路径打通；不能直接
+说明模型在 held-out benchmark 上变强。
+
+### 3.3 当前可发布 checkpoint
+
+最终可加载 checkpoint 已发布为 GitHub Release：
+
+```text
+https://github.com/flower418/retool/releases/tag/retool-rl-gs200-fused-hf
+```
+
+恢复说明和 checksum 见：
+
+```text
+docs/checkpoints.md
+```
+
+## 4. 当前定性观察
+
+目前还没有整理成正式表格的人工对话评测。已有观察更接近开发过程中的 sanity
+check：
+
+1. SFT 后模型更容易输出 ReTool 风格的代码块和最终答案行；
+2. 真实 sandbox 推理路径可以执行模型生成的 Python 并把 stdout 写回上下文；
+3. RL 后 checkpoint 可以加载并进行 sandbox 推理；
+4. 但模型仍会出现缺失最终答案、答案行格式不稳定、长输出耗尽预算、代码结果正确
+   但最终答案写错等问题。
+
+因此，当前 README 不报告 AIME/MATH benchmark 分数。仓库里有
+`scripts/eval_aime2024_models.py`，但正式 benchmark 需要重新跑完并检查输出质量后
+再写入结果。
+
+## 5. 不足与风险分析
+
+### 5.1 结果证据不足
+
+目前最完整的证据是训练过程日志和少量人工对话。SFT loss 下降不代表推理能力提升；
+RL reward 非常依赖最终答案解析，也不能直接替代独立 benchmark。
+
+下一步应该补：
+
+1. 固定 held-out benchmark，例如 AIME 2024 或 MATH test 子集；
+2. base / SFT / RL 三列对比；
+3. 每题保存原始输出、sandbox tool calls、最终答案、判分理由；
+4. 同时统计格式成功率、工具调用率、最终答案正确率。
+
+### 5.2 Reward 仍可能漏判或误判
+
+当前 reward 已做最终答案 canonicalization，但数学表达很复杂。历史 rollout audit
+已经暴露过这类问题：
+
+1. `2/3`、`\dfrac23`、`\frac{2}{3}` 等等价表达；
+2. 多个 `Answer:` 行；
+3. 答案行后附带多余解释；
+4. tool output 正确但最终答案缺失；
+5. 单位、区间、集合、根式、模数答案等格式。
+
+因此 reward 需要和 rollout dump 一起审计，不能只看 W&B 上的平均 reward。
+
+### 5.3 工具使用还不稳定
+
+训练日志显示工具调用链路是通的，但人工观察里仍有几类失败：
+
+1. 模型不调用工具，直接长文本推理；
+2. 模型调用工具后继续反复生成代码，消耗 response budget；
+3. 代码执行结果正确，但最终答案行没有遵守协议；
+4. response_length 触顶导致 `missing_final_answer`。
+
+这说明 prompt、stop condition、max tool/model calls 和最终答案监督还需要一起优化。
+
+### 5.4 当前 RL 不是完整收敛实验
+
+最终公开 checkpoint 来自 `global_step_200`，而不是计划中的完整 1000 step。
+它适合作为“链路打通后的阶段性模型”，不应被描述成最终最优模型。
+
+## 6. 需要补充的材料
+
+为了把 README 从“工程报告”升级成更像论文的结果页，建议补充以下材料：
+
+1. W&B 或日志截图：SFT `val/loss` 曲线、RL `critic/score/mean` 曲线、
+   response length、tool calls/turns。
+2. 人工对话样例：同一题下 base / SFT / RL 的原始输出，最好包含模型成功调用
+   sandbox 和失败案例各 1-2 个。
+3. benchmark 输出：至少一个固定小集合，例如 AIME 2024 30 题，保留逐题 JSONL。
+4. 错误分类表：`answer_mismatch`、`missing_final_answer`、sandbox error、
+   truncation、reward parser mismatch。
+
+如果有训练图像，建议放在：
+
+```text
+docs/assets/
+```
+
+如果有人工对话测评，建议放在：
+
+```text
+docs/eval_conversations/
+```
+
+README 只引用筛选后的代表性图和案例，原始材料保留在 docs 下。
+
+## 7. 复现命令
+
+### 7.1 安装
 
 ```bash
-python scripts/eval_aime2024_models.py \
-  --bench bench/aime2024/aime-2024.parquet \
-  --limit 30 \
-  --out-dir runs/eval_outputs/aime2024_30_three_models \
-  --max-new-tokens 4096 \
-  --step-max-new-tokens 1024 \
-  --max-model-calls 8 \
-  --max-tool-calls 4 \
-  --dtype bf16 \
-  --device-map cuda:0
+conda create -n retool python=3.11 -y
+conda activate retool
+pip install -r requirements.txt
 ```
 
-For multi-GPU evaluation, run one process per checkpoint with `--only base`,
-`--only sft`, or `--only rl`, and set `CUDA_VISIBLE_DEVICES` per process.
+### 7.2 生成 SFT 样例
 
-## Development Checks
+```bash
+set -a; source .env; set +a
+python gen_data.py \
+  --question "What is the sum of all integers from 1 to 100?" \
+  --out data/sft/generated.jsonl \
+  --model "$GEN_MODEL"
+```
+
+### 7.3 准备 RL 数据
+
+```bash
+python scripts/prepare_math_level_data.py
+```
+
+### 7.4 sandbox 推理
+
+```bash
+python scripts/infer_hf_with_sandbox.py \
+  --model /path/to/hf-checkpoint \
+  --question "Compute the sum of all integers from 1 to 100." \
+  --max-new-tokens 4096 \
+  --step-max-new-tokens 1024 \
+  --max-tool-calls 4 \
+  --max-model-calls 8
+```
+
+### 7.5 测试
 
 ```bash
 python -m py_compile gen_data.py retool_sandbox/*.py scripts/*.py tests/*.py
