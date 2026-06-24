@@ -22,8 +22,8 @@ score as correct; wrong, malformed, or missing final answers do not.
 ```text
 gen_data.py                         # question -> verified SFT message rows
 prompts/solve_with_code.txt         # SFT generation prompt template
-data/sft/sft_train.jsonl            # local generated examples
-data/sft/retool_sft_merged.jsonl    # JoeYing/ReTool-SFT + local examples
+data/sft/train.jsonl                # SFT train set, JoeYing/ReTool-SFT + local rows
+data/rl/math_l1_l3/                 # RL MATH level 1-3 prompt and metadata
 retool_sandbox/                     # async Python sandbox, agent loop, reward
 configs/retool_sandbox_agent.yaml   # veRL agent-loop registration
 scripts/run_verl_sft.sh             # veRL SFT launcher
@@ -63,7 +63,7 @@ Generate one verified ReTool-style example:
 set -a; source .env; set +a
 python gen_data.py \
   --question "What is the sum of all integers from 1 to 100?" \
-  --out data/sft/sft_train.jsonl \
+  --out data/sft/generated.jsonl \
   --model "$GEN_MODEL"
 ```
 
@@ -79,7 +79,7 @@ Each row is a two-message JSON array:
 For batch generation, pass a JSONL file with a required `question` field:
 
 ```bash
-python gen_data.py --in questions.jsonl --out data/sft/sft_train.jsonl --concurrency 4
+python gen_data.py --in questions.jsonl --out data/sft/generated.jsonl --concurrency 4
 ```
 
 `gen_data.py` validates generated code by default: it executes Python snippets,
@@ -125,10 +125,19 @@ cd /root/autodl-tmp/retool
 source /root/miniconda3/etc/profile.d/conda.sh
 conda activate zero
 
-DATA_JSONL=/root/autodl-tmp/retool/data/sft/retool_sft_merged.jsonl \
+DATA_JSONL=/root/autodl-tmp/retool/data/sft/train.jsonl \
 MODEL_PATH=/root/autodl-tmp/models/Qwen2.5-3B \
 bash scripts/run_verl_sft.sh
 ```
+
+Prepare the default RL MATH level 1-3 prompt dataset:
+
+```bash
+python scripts/prepare_math_level_data.py
+```
+
+This writes generated parquet files under `data/rl/math_l1_l3/`; those files are
+ignored, while the prompt template and metadata are committed.
 
 DAPO/GRPO-style RL uses the parameterized launcher:
 
@@ -140,8 +149,8 @@ conda activate zero
 export MODE=lora
 export LORA_RANK=64
 export MODEL_PATH=/root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf
-export TRAIN_FILE=/path/to/train.parquet
-export VAL_FILE=/path/to/val.parquet
+export TRAIN_FILE=/root/autodl-tmp/retool/data/rl/math_l1_l3/train.parquet
+export VAL_FILE=/root/autodl-tmp/retool/data/rl/math_l1_l3/val.parquet
 export USE_RETOOL_SANDBOX=True
 export ROLLOUT_N=8
 export MAX_RESPONSE_LENGTH=2048

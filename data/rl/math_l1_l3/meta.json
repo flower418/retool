@@ -1,0 +1,41 @@
+{
+  "dataset": "EleutherAI/hendrycks_math",
+  "description": "RL prompt dataset spec for Hendrycks MATH levels 1-3. Parquet files are generated artifacts and are not committed.",
+  "min_level": 1,
+  "max_level": 3,
+  "seed": 2026,
+  "repeat": 10,
+  "val_size": 128,
+  "subjects": [
+    "prealgebra",
+    "algebra",
+    "number_theory",
+    "counting_and_probability",
+    "geometry",
+    "intermediate_algebra",
+    "precalculus"
+  ],
+  "counts_by_level": {
+    "1": 564,
+    "2": 1348,
+    "3": 1592
+  },
+  "counts_by_subject": {
+    "prealgebra": 706,
+    "algebra": 910,
+    "number_theory": 369,
+    "counting_and_probability": 329,
+    "geometry": 270,
+    "intermediate_algebra": 526,
+    "precalculus": 394
+  },
+  "unique_rows_before_split": 3504,
+  "train_rows_after_repeat": 33760,
+  "val_rows": 128,
+  "prompt_template": "data/rl/math_l1_l3/prompt.txt",
+  "generated_files": {
+    "train": "data/rl/math_l1_l3/train.parquet",
+    "val": "data/rl/math_l1_l3/val.parquet"
+  },
+  "generate_command": "python scripts/prepare_math_level_data.py --out-dir data/rl/math_l1_l3 --min-level 1 --max-level 3 --repeat 10 --val-size 128 --seed 2026"
+}

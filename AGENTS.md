@@ -6,8 +6,9 @@ This repository implements direct SFT data synthesis for ReTool-style training. 
 
 - `gen_data.py`: async question-to-SFT generator with retry and resume support.
 - `prompts/solve_with_code.txt`: user prompt template used by `--prompt`.
-- `data/sft/sft_train.jsonl`: locally generated SFT examples as two-message arrays.
-- `data/sft/retool_sft_merged.jsonl`: Hugging Face-style rows with `{"messages": ...}` for training.
+- `data/sft/train.jsonl`: Hugging Face-style SFT train rows with `{"messages": ...}`.
+- `data/rl/math_l1_l3/prompt.txt`: RL prompt template for Hendrycks MATH levels 1-3.
+- `data/rl/math_l1_l3/meta.json`: source/count metadata for the generated RL parquet files.
 - Optional batch inputs can be supplied as external JSONL files with a required `question` field.
 - `.env.example`: documented environment variables. Keep local secrets in `.env`.
 - `requirements.txt`: Python runtime dependencies.
@@ -32,7 +33,7 @@ set -a; source .env; set +a
 Run a small generation job:
 
 ```bash
-python gen_data.py --question "What is the sum of all integers from 1 to 100?" --out data/sft/sft_train.jsonl --model "$GEN_MODEL"
+python gen_data.py --question "What is the sum of all integers from 1 to 100?" --out data/sft/generated.jsonl --model "$GEN_MODEL"
 ```
 
 Check syntax quickly:

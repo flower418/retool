@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_DIR=${REPO_DIR:-/root/autodl-tmp/retool}
 VERL_DIR=${VERL_DIR:-/root/verl}
 MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/models/Qwen2.5-3B}
-DATA_JSONL=${DATA_JSONL:-${REPO_DIR}/data/sft/retool_sft_merged.jsonl}
+DATA_JSONL=${DATA_JSONL:-${REPO_DIR}/data/sft/train.jsonl}
 DATA_DIR=${DATA_DIR:-${REPO_DIR}/data/verl_sft}
 RUN_ROOT=${RUN_ROOT:-${REPO_DIR}/runs}
 PROJECT_NAME=${PROJECT_NAME:-retool-sft}

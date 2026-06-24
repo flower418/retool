@@ -18,8 +18,8 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-retool-dapo-smoke-${MODE}}"
 LOGGER="${LOGGER:-[\"console\"]}"
 
 MODEL_PATH="${MODEL_PATH:-/root/autodl-tmp/retool/runs/merged/retool-qwen2_5-3b-sft-epoch3-global_step_941-hf}"
-TRAIN_FILE="${TRAIN_FILE:-/root/autodl-tmp/retool/data/dapo/smoke/train_8.parquet}"
-VAL_FILE="${VAL_FILE:-/root/autodl-tmp/retool/data/dapo/smoke/val_4.parquet}"
+TRAIN_FILE="${TRAIN_FILE:-/root/autodl-tmp/retool/data/rl/math_l1_l3/train.parquet}"
+VAL_FILE="${VAL_FILE:-/root/autodl-tmp/retool/data/rl/math_l1_l3/val.parquet}"
 CKPTS_DIR="${CKPTS_DIR:-/root/autodl-tmp/retool/runs/dapo_smoke/${EXPERIMENT_NAME}}"
 
 MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-1024}"

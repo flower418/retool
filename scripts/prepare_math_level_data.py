@@ -10,10 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-from datasets import load_dataset
-
-
 SUBJECTS = (
     "prealgebra",
     "algebra",
@@ -24,26 +20,45 @@ SUBJECTS = (
     "precalculus",
 )
 
-PROMPT_TEMPLATE = """Solve the following math problem step by step. The last line of your response should be of the form Answer: $Answer, where $Answer is the answer to the problem.
-
-{problem}
-
-Remember to put your answer on its own line after "Answer:"."""
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RL_DATA_DIR = "data/rl/math_l1_l3"
+DEFAULT_PROMPT_TEMPLATE_PATH = "data/rl/math_l1_l3/prompt.txt"
 
 LEVEL_RE = re.compile(r"(\d+)")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", required=True, help="Output directory for train.parquet, val.parquet, and meta.json.")
+    parser.add_argument(
+        "--out-dir",
+        default=DEFAULT_RL_DATA_DIR,
+        help="Output directory for train.parquet, val.parquet, and meta.json.",
+    )
     parser.add_argument("--dataset", default="EleutherAI/hendrycks_math")
     parser.add_argument("--subjects", nargs="+", default=list(SUBJECTS))
     parser.add_argument("--max-level", type=int, default=3)
     parser.add_argument("--min-level", type=int, default=1)
     parser.add_argument("--val-size", type=int, default=128)
-    parser.add_argument("--repeat", type=int, default=1, help="Repeat train rows after split.")
+    parser.add_argument("--repeat", type=int, default=10, help="Repeat train rows after split.")
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--prompt-template",
+        default=DEFAULT_PROMPT_TEMPLATE_PATH,
+        help="Prompt template file. Must contain {problem}.",
+    )
     return parser.parse_args()
+
+
+def load_prompt_template(path: str) -> str:
+    template = resolve_repo_path(path).read_text(encoding="utf-8").strip()
+    if "{problem}" not in template:
+        raise ValueError(f"prompt template must contain {{problem}}: {path}")
+    return template
+
+
+def resolve_repo_path(path: str) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else REPO_ROOT / candidate
 
 
 def level_to_int(level: str) -> int | None:
@@ -93,7 +108,7 @@ def extract_answer(solution: str) -> str | None:
     return remove_boxed(boxed)
 
 
-def make_row(row: dict[str, Any], subject: str, index: int) -> dict[str, Any] | None:
+def make_row(row: dict[str, Any], subject: str, index: int, prompt_template: str) -> dict[str, Any] | None:
     level = level_to_int(row.get("level", ""))
     if level is None:
         return None
@@ -104,7 +119,7 @@ def make_row(row: dict[str, Any], subject: str, index: int) -> dict[str, Any] | 
     problem = str(row["problem"])
     return {
         "data_source": "math_dapo",
-        "prompt": [{"role": "user", "content": PROMPT_TEMPLATE.format(problem=problem)}],
+        "prompt": [{"role": "user", "content": prompt_template.format(problem=problem)}],
         "ability": "MATH",
         "reward_model": {
             "ground_truth": answer,
@@ -122,8 +137,12 @@ def make_row(row: dict[str, Any], subject: str, index: int) -> dict[str, Any] | 
 
 def main() -> None:
     args = parse_args()
-    out_dir = Path(args.out_dir)
+    import pandas as pd
+    from datasets import load_dataset
+
+    out_dir = resolve_repo_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    prompt_template = load_prompt_template(args.prompt_template)
 
     rows: list[dict[str, Any]] = []
     counts_by_subject: dict[str, int] = {}
@@ -137,7 +156,7 @@ def main() -> None:
             level = level_to_int(item.get("level", ""))
             if level is None or not (args.min_level <= level <= args.max_level):
                 continue
-            converted = make_row(item, subject, index)
+            converted = make_row(item, subject, index, prompt_template)
             if converted is None:
                 dropped_no_answer += 1
                 continue
@@ -166,6 +185,7 @@ def main() -> None:
         "min_level": args.min_level,
         "max_level": args.max_level,
         "seed": args.seed,
+        "prompt_template": args.prompt_template,
         "repeat": args.repeat,
         "train_rows": len(train_rows),
         "val_rows": len(val_rows),
